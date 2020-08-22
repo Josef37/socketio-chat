@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>Socket.IO chat</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font: 13px Helvetica, Arial;
+      }
+      #main-form {
+        background: #000;
+        padding: 3px;
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+      }
+      #main-form input {
+        border: 0;
+        padding: 10px;
+        width: 90%;
+        margin-right: 0.5%;
+      }
+      #main-form button {
+        width: 9%;
+        background: rgb(130, 224, 255);
+        border: none;
+        padding: 10px;
+      }
+      #message-wrapper {
+        display: flex;
+        flex-direction: row;
+      }
+      #messages {
+        list-style-type: none;
+        margin: 0;
+        padding: 0;
+        flex: 1;
+      }
+      #messages li {
+        padding: 5px 10px;
+      }
+      #messages li:nth-child(odd) {
+        background: #eee;
+      }
+      #messages [data-name] {
+        color: darkgrey;
+      }
+      #users {
+        margin: 10px;
+      }
+      #users li {
+        padding: 5px 10px;
+        display: inline-block;
+        margin-left: 10px;
+        border: 1px solid grey;
+        cursor: pointer;
+      }
+      #users li::before {
+        content: "\25CF";
+        color: lightgreen;
+        padding-right: 5px;
+      }
+      #private {
+        width: 300px;
+        margin-right: 30px;
+      }
+      #private .wrapper {
+        border: 2px solid darkgray;
+        padding: 10px;
+        margin-bottom: 20px;
+        position: relative;
+      }
+      #private ul {
+        list-style-type: none;
+        padding: 10px;
+      }
+      #private .close {
+        font-size: 30px;
+        position: absolute;
+        right: 5px;
+        top: 0;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <ul id="users"></ul>
+    <div id="message-wrapper">
+      <ul id="messages"></ul>
+      <div id="private"></div>
+    </div>
+    <form id="main-form" action="">
+      <input id="m" autocomplete="off" /><button>Send</button>
+    </form>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      const form = document.querySelector("form");
+      const input = document.querySelector("#m");
+      const messages = document.querySelector("#messages");
+      const users = document.querySelector("#users");
+      const private = document.querySelector("#private");
+
+      const insertMessage = ({ name, msg }, list) => {
+        const nameNode = document.createElement("b");
+        nameNode.textContent = name + ": ";
+        const li = document.createElement("li");
+        const text = document.createTextNode(msg);
+        li.appendChild(nameNode);
+        li.appendChild(text);
+        list.appendChild(li);
+        return li;
+      };
+      const removeTypingIndicator = name => {
+        if (typingTimeouts[name]) {
+          clearTimeout(typingTimeouts[name]);
+          delete typingTimeouts[name];
+          let li = document.querySelector(`[data-name="${name}"]`);
+          messages.removeChild(li);
+        }
+      };
+      const clearElement = element => {
+        while (element.firstChild) {
+          element.removeChild(element.firstChild);
+        }
+      };
+
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const msg = { name: nickname, msg: input.value };
+        insertMessage(msg, messages);
+        socket.emit("chat message", msg);
+        input.value = "";
+      });
+      input.addEventListener("keypress", event => {
+        socket.emit("user typing", nickname);
+      });
+      socket.on("chat message", msg => {
+        insertMessage(msg, messages);
+        removeTypingIndicator(msg.name);
+      });
+      socket.on("user connect", () =>
+        insertMessage({ name: "Server", msg: "user connected" }, messages)
+      );
+      socket.on("user disconnect", name =>
+        insertMessage({ name: "Server", msg: name + " disconnected" }, messages)
+      );
+      socket.on("users online", usernames => {
+        clearElement(users);
+        ["Du"]
+          .concat(usernames.filter(username => username !== nickname))
+          .forEach(username => {
+            const li = document.createElement("li");
+            li.textContent = username;
+            if (username !== "Du") li.onclick = startPrivateChat(username);
+            users.appendChild(li);
+          });
+      });
+
+      const buildPrivateChat = (roomToken, name) => {
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("class", "wrapper");
+        const header = document.createElement("h3");
+        header.textContent = "Chat with " + name;
+        const messages = document.createElement("ul");
+        const form = document.createElement("form");
+        const input = document.createElement("input");
+        const button = document.createElement("button");
+        const close = document.createElement("span");
+        close.textContent = "–";
+        close.setAttribute("class", "close");
+        close.addEventListener("click", () => {
+          if (close.textContent === "–") {
+            messages.style.display = "none";
+            form.style.display = "none";
+            close.textContent = "+";
+          } else {
+            messages.style.display = "block";
+            form.style.display = "block";
+            close.textContent = "–";
+          }
+        });
+        button.textContent = "Send";
+        form.append(input, button);
+        form.addEventListener("submit", event => {
+          event.preventDefault();
+          const message = input.value;
+          socket.emit("private", roomToken, message);
+          insertMessage({ name: nickname, msg: message }, messages);
+          input.value = "";
+        });
+        wrapper.append(header, messages, form, close);
+        private.appendChild(wrapper);
+
+        socket.on(roomToken, message =>
+          insertMessage({ name, msg: message }, messages)
+        );
+      };
+      const startPrivateChat = username => () => {
+        socket.emit("invite for private", nickname, username);
+      };
+      socket.on("private room token", buildPrivateChat);
+
+      const typingTimeouts = {};
+      socket.on("user typing", name => {
+        removeTypingIndicator(name);
+        let li = insertMessage(
+          {
+            name: "Info",
+            msg: name + " is typing..."
+          },
+          messages
+        );
+        li.setAttribute("data-name", name);
+
+        typingTimeouts[name] = setTimeout(() => {
+          messages.removeChild(li);
+          delete typingTimeouts[name];
+        }, 1000);
+      });
+
+      const nickname = prompt("Who are you?");
+      socket.emit("nickname", nickname);
+      input.focus();
+    </script>
+  </body>
+</html>
